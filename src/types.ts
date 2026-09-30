@@ -25,7 +25,10 @@ export type Policy = {
   floor: number;
   allowFrontier: boolean;
   securityToReview: boolean;
+  /** "beat": decide once the window after the first confident answer closes. "all": wait for every router. */
   race: "beat" | "all";
+  /** How long the race keeps listening after the first confident answer, in ms. */
+  windowMs: number;
   enabled: RouterId[];
 };
 

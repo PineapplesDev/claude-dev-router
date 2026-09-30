@@ -1,5 +1,5 @@
 import { executionCost } from "./catalog";
-import { runModeled } from "./policy";
+import { decideRace, runModeled } from "./policy";
 import type { BenchCase, Lane, Policy, RouterId, RouterRun } from "./types";
 
 export type Grade = "exact" | "under" | "over" | "abstain";
@@ -21,7 +21,8 @@ export function grade(gold: Lane, picked: Lane): Grade {
 }
 
 export type RouterScore = {
-  routerId: RouterId;
+  /** "race" is the combined decision from decideRace, not a single model. */
+  routerId: RouterId | "race";
   exact: number;
   under: number;
   over: number;
@@ -55,6 +56,7 @@ export function scoreSuite(cases: BenchCase[], policy: Policy, ids: RouterId[]):
 
   const jevRuns = byRouter.get("jev") ?? [];
   for (const run of jevRuns) jevLanes.push(run.pick.lane);
+  const jevExact = jevLanes.filter((lane, i) => lane === cases[i]?.gold).length;
 
   return ids.map((id) => {
     const runs = byRouter.get(id) ?? [];
@@ -78,7 +80,6 @@ export function scoreSuite(cases: BenchCase[], policy: Policy, ids: RouterId[]):
       routed += run.routerCostUsd + executionCost(run.pick.lane);
     });
     const n = cases.length || 1;
-    const jevExact = scoreExactOnly(cases, policy, "jev");
     return {
       routerId: id,
       exact,
@@ -95,11 +96,57 @@ export function scoreSuite(cases: BenchCase[], policy: Policy, ids: RouterId[]):
   });
 }
 
-function scoreExactOnly(cases: BenchCase[], policy: Policy, id: RouterId): number {
-  return cases.reduce((n, item) => {
-    const run = runModeled(id, item.task, item.context, policy);
-    return n + (run.pick.lane === item.gold ? 1 : 0);
-  }, 0);
+/**
+ * Scores the combined race, which is what a caller actually receives.
+ * Every router runs on every case; decideRace picks the lane.
+ */
+export function scoreRace(cases: BenchCase[], policy: Policy, ids: RouterId[]): RouterScore {
+  let exact = 0;
+  let under = 0;
+  let over = 0;
+  let abstain = 0;
+  let agreesJev = 0;
+  let jevExact = 0;
+  let cost = 0;
+  let routed = 0;
+  const times: number[] = [];
+
+  for (const item of cases) {
+    const runs = ids.map((id) => runModeled(id, item.task, item.context, policy));
+    const decision = decideRace(runs, policy);
+    const g = grade(item.gold, decision.lane);
+    if (g === "exact") exact += 1;
+    else if (g === "under") under += 1;
+    else if (g === "over") over += 1;
+    else abstain += 1;
+
+    const jev = runs.find((r) => r.routerId === "jev");
+    if (jev && jev.pick.lane === decision.lane) agreesJev += 1;
+    if (jev && jev.pick.lane === item.gold) jevExact += 1;
+
+    // Every enabled router is called, so the race pays for all of them.
+    const racePaid = runs
+      .filter((r) => policy.enabled.includes(r.routerId))
+      .reduce((sum, r) => sum + r.routerCostUsd, 0);
+    cost += racePaid;
+    routed += racePaid + executionCost(decision.lane);
+    times.push(decision.decidedAtMs);
+  }
+
+  const n = cases.length || 1;
+  return {
+    routerId: "race",
+    exact,
+    under,
+    over,
+    abstain,
+    total: cases.length,
+    medianMs: median(times),
+    meanRouterCost: cost / n,
+    meanRoutedCost: routed / n,
+    beatsJevExact: exact - jevExact,
+    agreesJev,
+  };
 }
 
 export type CaseRow = {
@@ -108,17 +155,31 @@ export type CaseRow = {
   gold: Lane;
   lanes: Partial<Record<RouterId, Lane>>;
   grades: Partial<Record<RouterId, Grade>>;
+  race: Lane;
+  raceGrade: Grade;
+  /** Routers whose confident answers were inside the race window. */
+  raceConsidered: RouterId[];
 };
 
 export function caseRows(cases: BenchCase[], policy: Policy, ids: RouterId[]): CaseRow[] {
   return cases.map((item) => {
     const lanes: CaseRow["lanes"] = {};
     const grades: CaseRow["grades"] = {};
-    for (const id of ids) {
-      const run = runModeled(id, item.task, item.context, policy);
-      lanes[id] = run.pick.lane;
-      grades[id] = grade(item.gold, run.pick.lane);
+    const runs = ids.map((id) => runModeled(id, item.task, item.context, policy));
+    for (const run of runs) {
+      lanes[run.routerId] = run.pick.lane;
+      grades[run.routerId] = grade(item.gold, run.pick.lane);
     }
-    return { id: item.id, title: item.title, gold: item.gold, lanes, grades };
+    const decision = decideRace(runs, policy);
+    return {
+      id: item.id,
+      title: item.title,
+      gold: item.gold,
+      lanes,
+      grades,
+      race: decision.lane,
+      raceGrade: grade(item.gold, decision.lane),
+      raceConsidered: decision.considered,
+    };
   });
 }

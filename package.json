@@ -2,5 +2,13 @@
   "name": "claude-dev-router",
   "private": true,
   "type": "module",
-  "description": "Fastest-confident routing across Opus 5.5 low, Fable 5.1 low, Haiku, and Jev."
+  "description": "Cautious race routing across Opus 5.5 low, Fable 5.1 low, Haiku, and Jev.",
+  "scripts": {
+    "bench": "tsx src/bench.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
 }
