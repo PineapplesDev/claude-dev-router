@@ -168,6 +168,7 @@ export const DEFAULT_POLICY: Policy = {
   allowFrontier: true,
   securityToReview: true,
   race: "beat",
+  windowMs: 250,
   enabled: ["beat", "haiku", "opus-low", "fable-low", "jev"],
 };
 
